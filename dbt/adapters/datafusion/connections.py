@@ -1,11 +1,20 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
-import dbt.exceptions # noqa
+import dbt.exceptions  # noqa
 from dbt.adapters.base import Credentials
 
 from dbt.adapters.base import BaseConnectionManager as connection_cls
 
 from dbt.logger import GLOBAL_LOGGER as logger
+
+from dbt.adapters.datafusion import db
+
+from typing import Tuple
+
+from dbt.contracts.connection import AdapterResponse
+
+import dbt.clients.agate_helper
+
 
 @dataclass
 class DataFusionCredentials(Credentials):
@@ -19,12 +28,9 @@ class DataFusionCredentials(Credentials):
     # port: int
     # username: str
     # password: str
+    path: str
 
-    _ALIASES = {
-        "dbname":"database",
-        "pass":"password",
-        "user":"username"
-    }
+    _ALIASES = {"dbname": "database", "pass": "password", "user": "username"}
 
     @property
     def type(self):
@@ -43,11 +49,11 @@ class DataFusionCredentials(Credentials):
         """
         List of keys to display in the `dbt debug` output.
         """
-        return ("host","port","username","user")
+        return ("host", "port", "username", "user", "path")
+
 
 class DataFusionConnectionManager(connection_cls):
     TYPE = "datafusion"
-
 
     @contextmanager
     def exception_handler(self, sql: str):
@@ -68,7 +74,10 @@ class DataFusionConnectionManager(connection_cls):
         #     logger.debug("Rolling back transaction.")
         #     self.release(connection_name)
         #     raise dbt.exceptions.RuntimeException(str(exc))
-        pass
+        try:
+            yield
+        except Exception as e:
+            raise
 
     @classmethod
     def open(cls, connection):
@@ -76,28 +85,41 @@ class DataFusionConnectionManager(connection_cls):
         Receives a connection object and a Credentials object
         and moves it to the "open" state.
         """
-        # ## Example ##
-        # if connection.state == "open":
-        #     logger.debug("Connection is already open, skipping open.")
-        #     return connection
+        ## Example ##
+        if connection.state == "open":
+            logger.debug("Connection is already open, skipping open.")
+            return connection
 
-        # credentials = connection.credentials
+        credentials = connection.credentials
 
-        # try:
-        #     handle = myadapter_library.connect(
-        #         host=credentials.host,
-        #         port=credentials.port,
-        #         username=credentials.username,
-        #         password=credentials.password,
-        #         catalog=credentials.database
-        #     )
-        #     connection.state = "open"
-        #     connection.handle = handle
-        # return connection
-        pass
+        try:
+            # handle = myadapter_library.connect(
+            #     host=credentials.host,
+            #     port=credentials.port,
+            #     username=credentials.username,
+            #     password=credentials.password,
+            #     catalog=credentials.database
+            # )
+
+            handle = db.DB(credentials.path)
+
+            connection.state = "open"
+            connection.handle = handle
+
+        except Exception as e:
+            logger.debug(
+                "Got an error when attempting to create a datafusion client: '{}'".format(
+                    e
+                )
+            )
+            connection.handle = None
+            connection.state = "fail"
+            raise Exception(str(e))
+
+        return connection
 
     @classmethod
-    def get_response(cls,cursor):
+    def get_response(cls, cursor):
         """
         Gets a cursor object and returns adapter-specific information
         about the last executed command generally a AdapterResponse ojbect
@@ -106,7 +128,8 @@ class DataFusionConnectionManager(connection_cls):
         """
         # ## Example ##
         # return cursor.status_message
-        pass
+        message = "OK"
+        return AdapterResponse(_message=message)
 
     def cancel(self, connection):
         """
@@ -120,3 +143,27 @@ class DataFusionConnectionManager(connection_cls):
         # res = cursor.fetchone()
         # logger.debug("Canceled query "{}": {}".format(connection_name, res))
         pass
+
+    def begin(self):
+        pass
+
+    def cancel_open(self):
+        pass
+
+    def commit(self):
+        pass
+
+    def execute(self, sql, auto_begin=False, fetch=None) -> Tuple[str, str]:
+        conn = self.get_thread_connection()
+        client = conn.handle.ctx
+
+        table = dbt.clients.agate_helper.empty_table()
+
+        if fetch:
+            table = client.sql(sql)
+
+        response = AdapterResponse(  # type: ignore[call-arg]
+            _message="OK", rows_affected=0, code="datafusion"
+        )
+
+        return response, table
