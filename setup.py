@@ -13,7 +13,7 @@ setup(
     long_description=description,
     author="Burkay Gur",
     author_email="burkay@fal.ai",
-    url="If you have already made a github repo to tie the project to place it here, otherwise update in setup.py later.",
+    url="https://github.com/fal-ai/dbt-datafusion",
     packages=find_namespace_packages(include=["dbt", "dbt.*"]),
     include_package_data=True,
     install_requires=[
